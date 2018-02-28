@@ -1,0 +1,97 @@
+# How ActiveRecord Associations are built using the DSL
+# class Product << ActiveRecord:Base
+#   belongs_to :order
+# end
+# On file : activerecord/lib/active_record/associations.rb:
+# def belongs_to(name, scope = nil, **options)
+#   reflection = Builder::BelongsTo.build(self, name, scope, options)
+#   Reflection.add_reflection self, name, reflection
+# end
+#
+# On file active_record/associations/builder/belongs_to.rb it inherits from
+# SingularAssociation. On Builder::SingularAssociation it inherits from
+# Builder::Association that defines the class method .build that takes in
+# (model, name, scope, options, &block) and returns a reflection instance.
+#     def self.build(model, name, scope, options, &block)
+#       if model.dangerous_attribute_method?(name)
+#         raise ArgumentError, "You tried to define an association named #{name} on the model #{model.name}, but " \
+#                              "this will conflict with a method #{name} already defined by Active Record. " \
+#                              "Please choose a different association name."
+#       end
+# 
+#       extension = define_extensions model, name, &block
+#       reflection = create_reflection model, name, scope, options, extension
+#       define_accessors model, reflection
+#       define_callbacks model, reflection
+#       define_validations model, reflection
+#       reflection
+#     end
+# I guess the important method is define_accessors(model, reflection):
+#    # Defines the setter and getter methods for the association
+#    # class Post < ActiveRecord::Base
+#    #   has_many :comments
+#    # end
+#    #
+#    # Post.first.comments and Post.first.comments= methods are defined by this method...
+#    def self.define_accessors(model, reflection)
+#      mixin = model.generated_association_methods
+#      name = reflection.name
+#      define_readers(mixin, name)
+#      define_writers(mixin, name)
+#    end
+#
+# model is the caller (self), so the ActiveRecord model that states the
+# association, for example: product.
+# name is the target, so in this case, would be order.
+# The mixin is a module GeneratedAssociationMethods, that is create in
+# ActiveRecord::Core
+#       def generated_association_methods
+#         @generated_association_methods ||= begin
+#           mod = const_set(:GeneratedAssociationMethods, Module.new)
+#           private_constant :GeneratedAssociationMethods
+#           include mod
+# 
+#           mod
+#         end
+#       end
+# This module is included in the ActiveRecord::Core of our "Product" and will
+# house the created accessors when .define_readers/writers is called, like so:
+# define_readers(Module_to_house_accessors, target=order)
+#     def self.define_readers(mixin, name)
+#       mixin.class_eval <<-CODE, __FILE__, __LINE__ + 1
+#         def #{name}
+#           association(:#{name}).reader
+#         end
+#       CODE
+#     end
+# 
+#     def self.define_writers(mixin, name)
+#       mixin.class_eval <<-CODE, __FILE__, __LINE__ + 1
+#         def #{name}=(value)
+#           association(:#{name}).writer(value)
+#         end
+#       CODE
+#     end
+# specializations of these methods are found on a per-association-type basis,
+# for example for associations that inherit from CollectionAssociation, they are
+# defined as:
+#     # Defines the setter and getter methods for the collection_singular_ids.
+#     def self.define_readers(mixin, name)
+#       super
+# 
+#       mixin.class_eval <<-CODE, __FILE__, __LINE__ + 1
+#         def #{name.to_s.singularize}_ids
+#           association(:#{name}).ids_reader
+#         end
+#       CODE
+#     end
+# 
+#     def self.define_writers(mixin, name)
+#       super
+# 
+#       mixin.class_eval <<-CODE, __FILE__, __LINE__ + 1
+#         def #{name.to_s.singularize}_ids=(ids)
+#           association(:#{name}).ids_writer(ids)
+#         end
+#       CODE
+#     end
